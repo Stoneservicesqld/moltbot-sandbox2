@@ -9,9 +9,13 @@
 
 set -e
 
+# Always kill any existing openclaw gateway process so we start fresh with the current token.
+# The old guard (exit 0 if running) caused stale tokenless gateways to persist across restarts.
 if pgrep -f "openclaw gateway" > /dev/null 2>&1; then
-    echo "OpenClaw gateway is already running, exiting."
-    exit 0
+    echo "Killing existing OpenClaw gateway process before restart..."
+    pkill -TERM -f "openclaw gateway" 2>/dev/null || true
+    sleep 2
+    pkill -KILL -f "openclaw gateway" 2>/dev/null || true
 fi
 
 CONFIG_DIR="/root/.openclaw"
