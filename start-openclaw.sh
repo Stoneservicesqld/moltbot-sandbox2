@@ -201,17 +201,16 @@ if (process.env.CF_AI_GATEWAY_MODEL) {
 }
 
 if (process.env.TELEGRAM_BOT_TOKEN) {
-    const dmPolicy = process.env.TELEGRAM_DM_POLICY || 'pairing';
+    const dmPolicy = process.env.TELEGRAM_DM_POLICY || 'open';
     config.channels.telegram = {
         botToken: process.env.TELEGRAM_BOT_TOKEN,
         enabled: true,
         dmPolicy: dmPolicy,
+        allowFrom: ['*'],
+        groupPolicy: 'allowlist',
+        streamMode: 'partial',
     };
-    if (process.env.TELEGRAM_DM_ALLOW_FROM) {
-        config.channels.telegram.allowFrom = process.env.TELEGRAM_DM_ALLOW_FROM.split(',');
-    } else if (dmPolicy === 'open') {
-        config.channels.telegram.allowFrom = ['*'];
-    }
+    console.log('Telegram channel configured with dmPolicy:', dmPolicy);
 }
 
 if (process.env.DISCORD_BOT_TOKEN) {
@@ -233,23 +232,24 @@ if (process.env.SLACK_BOT_TOKEN && process.env.SLACK_APP_TOKEN) {
     };
 }
 
-// WhatsApp - always enable
-config.channels.whatsapp = config.channels.whatsapp || {};
-config.channels.whatsapp.dmPolicy = config.channels.whatsapp.dmPolicy || 'pairing';
-config.channels.whatsapp.groupPolicy = config.channels.whatsapp.groupPolicy || 'allowlist';
-config.channels.whatsapp.mediaMaxMb = config.channels.whatsapp.mediaMaxMb || 50;
-config.channels.whatsapp.debounceMs = (config.channels.whatsapp.debounceMs !== undefined) ? config.channels.whatsapp.debounceMs : 0;
-config.plugins = config.plugins || {};
-config.plugins.entries = config.plugins.entries || {};
-config.plugins.entries.whatsapp = config.plugins.entries.whatsapp || { enabled: true };
-console.log('WhatsApp channel configured');
+// Patch Anthropic API key directly into openclaw.json auth profile
+// This ensures the key is always available regardless of how onboard ran
+if (process.env.ANTHROPIC_API_KEY) {
+    config.auth = config.auth || {};
+    config.auth.profiles = config.auth.profiles || {};
+    config.auth.profiles['anthropic:default'] = config.auth.profiles['anthropic:default'] || {};
+    config.auth.profiles['anthropic:default'].provider = 'anthropic';
+    config.auth.profiles['anthropic:default'].mode = 'api_key';
+    config.auth.profiles['anthropic:default'].key = process.env.ANTHROPIC_API_KEY;
+    console.log('Anthropic API key patched into openclaw.json auth profile');
+}
 
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 console.log('Configuration patched successfully');
 
-// Patch auth-profiles.json with Anthropic API key
+// Also patch auth-profiles.json if it exists
 const anthropicKey = process.env.ANTHROPIC_API_KEY;
-if (anthropicKey && anthropicKey.startsWith('sk-ant-')) {
+if (anthropicKey) {
     const agentAuthPath = '/root/.openclaw/agents/main/agent/auth-profiles.json';
     try {
         const ap = JSON.parse(fs.readFileSync(agentAuthPath, 'utf8'));
