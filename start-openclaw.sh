@@ -10,7 +10,6 @@
 set -e
 
 # Always kill any existing openclaw gateway process so we start fresh with the current token.
-# The old guard (exit 0 if running) caused stale tokenless gateways to persist across restarts.
 if pgrep -f "openclaw gateway" > /dev/null 2>&1; then
     echo "Killing existing OpenClaw gateway process before restart..."
     pkill -TERM -f "openclaw gateway" 2>/dev/null || true
@@ -26,7 +25,6 @@ RCLONE_CONF="/root/.config/rclone/rclone.conf"
 LAST_SYNC_FILE="/tmp/.last-sync"
 
 echo "Config directory: $CONFIG_DIR"
-
 mkdir -p "$CONFIG_DIR"
 
 # ============================================================
@@ -65,7 +63,6 @@ if r2_configured; then
     setup_rclone
 
     echo "Checking R2 for existing backup..."
-    # Check if R2 has an openclaw config backup
     if rclone ls "r2:${R2_BUCKET}/openclaw/openclaw.json" $RCLONE_FLAGS 2>/dev/null | grep -q openclaw.json; then
         echo "Restoring config from R2..."
         rclone copy "r2:${R2_BUCKET}/openclaw/" "$CONFIG_DIR/" $RCLONE_FLAGS -v 2>&1 || echo "WARNING: config restore failed with exit code $?"
@@ -81,8 +78,7 @@ if r2_configured; then
         echo "No backup found in R2, starting fresh"
     fi
 
-    # Restore workspace
-    REMOTE_WS_COUNT=$(rclone ls "r2:${R2_BUCKET}/workspace/" $RCLONE_FLAGS 2>/dev/null | wc -l)
+    REMOTE_WS_COUNT=$(rclone ls "r2:${R2_BUCKET}/workspace/" $RCLONE_FLAGS 2>/dev/null | wc -l )
     if [ "$REMOTE_WS_COUNT" -gt 0 ]; then
         echo "Restoring workspace from R2 ($REMOTE_WS_COUNT files)..."
         mkdir -p "$WORKSPACE_DIR"
@@ -90,7 +86,6 @@ if r2_configured; then
         echo "Workspace restored"
     fi
 
-    # Restore skills
     REMOTE_SK_COUNT=$(rclone ls "r2:${R2_BUCKET}/skills/" $RCLONE_FLAGS 2>/dev/null | wc -l)
     if [ "$REMOTE_SK_COUNT" -gt 0 ]; then
         echo "Restoring skills from R2 ($REMOTE_SK_COUNT files)..."
@@ -135,15 +130,11 @@ else
 fi
 
 # ============================================================
-# PATCH CONFIG (channels, gateway auth, trusted proxies)
+# PATCH CONFIG
 # ============================================================
-# openclaw onboard handles provider/model config, but we need to patch in:
-# - Channel config (Telegram, Discord, Slack)
-# - Gateway token auth
-# - Trusted proxies for sandbox networking
-# - Base URL override for legacy AI Gateway path
 node << 'EOFPATCH'
 const fs = require('fs');
+const path = require('path');
 
 const configPath = '/root/.openclaw/openclaw.json';
 console.log('Patching config at:', configPath);
@@ -158,14 +149,17 @@ try {
 config.gateway = config.gateway || {};
 config.channels = config.channels || {};
 
-// Gateway configuration
 config.gateway.port = 18789;
 config.gateway.mode = 'local';
 config.gateway.trustedProxies = ['10.1.0.0'];
 
-if (process.env.OPENCLAW_GATEWAY_TOKEN) {
+const gatewayToken = process.env.MOLTBOT_GATEWAY_TOKEN || process.env.OPENCLAW_GATEWAY_TOKEN;
+if (gatewayToken) {
     config.gateway.auth = config.gateway.auth || {};
-    config.gateway.auth.token = process.env.OPENCLAW_GATEWAY_TOKEN;
+    config.gateway.auth.token = gatewayToken;
+    console.log('Gateway token configured');
+} else {
+    console.log('WARNING: No gateway token found');
 }
 
 if (process.env.OPENCLAW_DEV_MODE === 'true') {
@@ -173,39 +167,24 @@ if (process.env.OPENCLAW_DEV_MODE === 'true') {
     config.gateway.controlUi.allowInsecureAuth = true;
 }
 
-// Legacy AI Gateway base URL override:
-// ANTHROPIC_BASE_URL is picked up natively by the Anthropic SDK,
-// so we don't need to patch the provider config. Writing a provider
-// entry without a models array breaks OpenClaw's config validation.
-
-// AI Gateway model override (CF_AI_GATEWAY_MODEL=provider/model-id)
-// Adds a provider entry for any AI Gateway provider and sets it as default model.
-// Examples:
-//   workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast
-//   openai/gpt-4o
-//   anthropic/claude-sonnet-4-5
 if (process.env.CF_AI_GATEWAY_MODEL) {
     const raw = process.env.CF_AI_GATEWAY_MODEL;
     const slashIdx = raw.indexOf('/');
     const gwProvider = raw.substring(0, slashIdx);
     const modelId = raw.substring(slashIdx + 1);
-
     const accountId = process.env.CF_AI_GATEWAY_ACCOUNT_ID;
     const gatewayId = process.env.CF_AI_GATEWAY_GATEWAY_ID;
     const apiKey = process.env.CLOUDFLARE_AI_GATEWAY_API_KEY;
-
     let baseUrl;
     if (accountId && gatewayId) {
         baseUrl = 'https://gateway.ai.cloudflare.com/v1/' + accountId + '/' + gatewayId + '/' + gwProvider;
-        if (gwProvider === 'workers-ai') baseUrl += '/v1';
+        if (gwProvider === 'workers-ai' ) baseUrl += '/v1';
     } else if (gwProvider === 'workers-ai' && process.env.CF_ACCOUNT_ID) {
         baseUrl = 'https://api.cloudflare.com/client/v4/accounts/' + process.env.CF_ACCOUNT_ID + '/ai/v1';
     }
-
-    if (baseUrl && apiKey) {
+    if (baseUrl && apiKey ) {
         const api = gwProvider === 'anthropic' ? 'anthropic-messages' : 'openai-completions';
         const providerName = 'cf-ai-gw-' + gwProvider;
-
         config.models = config.models || {};
         config.models.providers = config.models.providers || {};
         config.models.providers[providerName] = {
@@ -217,15 +196,10 @@ if (process.env.CF_AI_GATEWAY_MODEL) {
         config.agents = config.agents || {};
         config.agents.defaults = config.agents.defaults || {};
         config.agents.defaults.model = { primary: providerName + '/' + modelId };
-        console.log('AI Gateway model override: provider=' + providerName + ' model=' + modelId + ' via ' + baseUrl);
-    } else {
-        console.warn('CF_AI_GATEWAY_MODEL set but missing required config (account ID, gateway ID, or API key)');
+        console.log('AI Gateway model override configured');
     }
 }
 
-// Telegram configuration
-// Overwrite entire channel object to drop stale keys from old R2 backups
-// that would fail OpenClaw's strict config validation (see #47)
 if (process.env.TELEGRAM_BOT_TOKEN) {
     const dmPolicy = process.env.TELEGRAM_DM_POLICY || 'pairing';
     config.channels.telegram = {
@@ -240,14 +214,10 @@ if (process.env.TELEGRAM_BOT_TOKEN) {
     }
 }
 
-// Discord configuration
-// Discord uses a nested dm object: dm.policy, dm.allowFrom (per DiscordDmConfig)
 if (process.env.DISCORD_BOT_TOKEN) {
     const dmPolicy = process.env.DISCORD_DM_POLICY || 'pairing';
     const dm = { policy: dmPolicy };
-    if (dmPolicy === 'open') {
-        dm.allowFrom = ['*'];
-    }
+    if (dmPolicy === 'open') dm.allowFrom = ['*'];
     config.channels.discord = {
         token: process.env.DISCORD_BOT_TOKEN,
         enabled: true,
@@ -255,7 +225,6 @@ if (process.env.DISCORD_BOT_TOKEN) {
     };
 }
 
-// Slack configuration
 if (process.env.SLACK_BOT_TOKEN && process.env.SLACK_APP_TOKEN) {
     config.channels.slack = {
         botToken: process.env.SLACK_BOT_TOKEN,
@@ -264,8 +233,35 @@ if (process.env.SLACK_BOT_TOKEN && process.env.SLACK_APP_TOKEN) {
     };
 }
 
+// WhatsApp - always enable
+config.channels.whatsapp = config.channels.whatsapp || {};
+config.channels.whatsapp.dmPolicy = config.channels.whatsapp.dmPolicy || 'pairing';
+config.channels.whatsapp.groupPolicy = config.channels.whatsapp.groupPolicy || 'allowlist';
+config.channels.whatsapp.mediaMaxMb = config.channels.whatsapp.mediaMaxMb || 50;
+config.channels.whatsapp.debounceMs = (config.channels.whatsapp.debounceMs !== undefined) ? config.channels.whatsapp.debounceMs : 0;
+config.plugins = config.plugins || {};
+config.plugins.entries = config.plugins.entries || {};
+config.plugins.entries.whatsapp = config.plugins.entries.whatsapp || { enabled: true };
+console.log('WhatsApp channel configured');
+
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 console.log('Configuration patched successfully');
+
+// Patch auth-profiles.json with Anthropic API key
+const anthropicKey = process.env.ANTHROPIC_API_KEY;
+if (anthropicKey && anthropicKey.startsWith('sk-ant-')) {
+    const agentAuthPath = '/root/.openclaw/agents/main/agent/auth-profiles.json';
+    try {
+        const ap = JSON.parse(fs.readFileSync(agentAuthPath, 'utf8'));
+        if (ap.profiles && ap.profiles['anthropic:default']) {
+            ap.profiles['anthropic:default'].key = anthropicKey;
+            fs.writeFileSync(agentAuthPath, JSON.stringify(ap, null, 2));
+            console.log('auth-profiles.json patched with Anthropic API key');
+        }
+    } catch (e) {
+        console.log('auth-profiles.json not found or not patchable:', e.message);
+    }
+}
 EOFPATCH
 
 # ============================================================
@@ -324,9 +320,11 @@ rm -f "$CONFIG_DIR/gateway.lock" 2>/dev/null || true
 
 echo "Dev mode: ${OPENCLAW_DEV_MODE:-false}"
 
-if [ -n "$OPENCLAW_GATEWAY_TOKEN" ]; then
+GATEWAY_TOKEN="${MOLTBOT_GATEWAY_TOKEN:-$OPENCLAW_GATEWAY_TOKEN}"
+
+if [ -n "$GATEWAY_TOKEN" ]; then
     echo "Starting gateway with token auth..."
-    exec openclaw gateway --port 18789 --verbose --allow-unconfigured --bind lan --token "$OPENCLAW_GATEWAY_TOKEN"
+    exec openclaw gateway --port 18789 --verbose --allow-unconfigured --bind lan --token "$GATEWAY_TOKEN"
 else
     echo "Starting gateway with device pairing (no token)..."
     exec openclaw gateway --port 18789 --verbose --allow-unconfigured --bind lan
