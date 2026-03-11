@@ -7,7 +7,7 @@
 # 4. Starts a background sync loop (rclone, watches for file changes)
 # 5. Starts the gateway
 
-set -e
+# NOT using set -e: onboard failures must not prevent gateway from starting
 
 # Always kill any existing openclaw gateway process so we start fresh with the current token.
 if pgrep -f "openclaw gateway" > /dev/null 2>&1; then
@@ -115,16 +115,17 @@ if [ ! -f "$CONFIG_FILE" ]; then
         AUTH_ARGS="--auth-choice openai-api-key --openai-api-key $OPENAI_API_KEY"
     fi
 
-    openclaw onboard --non-interactive --accept-risk \
+    echo "Running openclaw onboard (timeout 90s)..."
+    timeout 90 openclaw onboard --non-interactive --accept-risk \
         --mode local \
         $AUTH_ARGS \
         --gateway-port 18789 \
         --gateway-bind lan \
         --skip-channels \
         --skip-skills \
-        --skip-health
+        --skip-health || echo "WARNING: onboard exited with code $? â continuing to gateway start"
 
-    echo "Onboard completed"
+    echo "Onboard step done"
 else
     echo "Using existing config"
 fi
@@ -153,7 +154,7 @@ config.gateway.port = 18789;
 config.gateway.mode = 'local';
 config.gateway.trustedProxies = ['10.1.0.0'];
 
-const gatewayToken = process.env.MOLTBOT_GATEWAY_TOKEN || process.env.OPENCLAW_GATEWAY_TOKEN;
+const gatewayToken = process.env.MOLTB9?_GATEWAY_TOKEN || process.env.OPENCLAW_GATEWAY_TOKEN;
 if (gatewayToken) {
     config.gateway.auth = config.gateway.auth || {};
     config.gateway.auth.token = gatewayToken;
@@ -323,9 +324,9 @@ echo "Dev mode: ${OPENCLAW_DEV_MODE:-false}"
 GATEWAY_TOKEN="${MOLTBOT_GATEWAY_TOKEN:-$OPENCLAW_GATEWAY_TOKEN}"
 
 if [ -n "$GATEWAY_TOKEN" ]; then
-    echo "Starting gateway with token auth..."
+    echo "Starting gateway with token auth (token length: ${#GATEWAY_TOKEN})..."
     exec openclaw gateway --port 18789 --verbose --allow-unconfigured --bind lan --token "$GATEWAY_TOKEN"
 else
-    echo "Starting gateway with device pairing (no token)..."
+    echo "WARNING: No MOLTBOT_GATEWAY_TOKEN or OPENCLAW_GATEWAY_TOKEN set â starting without token"
     exec openclaw gateway --port 18789 --verbose --allow-unconfigured --bind lan
 fi
