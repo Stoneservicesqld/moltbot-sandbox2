@@ -84,7 +84,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
             --cloudflare-ai-gateway-gateway-id $CF_AI_GATEWAY_GATEWAY_ID \
             --cloudflare-ai-gateway-api-key $CLOUDFLARE_AI_GATEWAY_API_KEY"
     elif [ -n "$ANTHROPIC_API_KEY" ]; then
-        AUTH_ARGS="--auth-choice anthropic-api-key --anthropic-api-key $ANTHROPIC_API_KEY"
+        AUTH_ARGS="--auth-choice apiKey --token $ANTHROPIC_API_KEY"
     elif [ -n "$OPENAI_API_KEY" ]; then
         AUTH_ARGS="--auth-choice openai-api-key --openai-api-key $OPENAI_API_KEY"
     fi
