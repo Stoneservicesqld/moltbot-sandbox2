@@ -7,7 +7,7 @@
 # 4. Starts a background sync loop (rclone, watches for file changes)
 # 5. Starts the gateway
 
-set -e
+# set -e removed: onboard failures must not prevent gateway from starting
 
 if pgrep -f "openclaw gateway" > /dev/null 2>&1; then
     echo "Killing existing OpenClaw gateway process before restart..."
@@ -58,11 +58,9 @@ fi
 if $r2_configured; then
     echo "Restoring config from R2..."
     rclone copy "r2:${R2_BUCKET}/openclaw/" "$CONFIG_DIR/" $RCLONE_FLAGS -v 2>&1 || echo "WARNING: config restore failed with exit code $?"
-    # Legacy path: try to restore from old clawdot path if new path is empty
     if [ ! -f "$CONFIG_FILE" ]; then
         rclone copy "r2:${R2_BUCKET}/clawdot/" "$CONFIG_DIR/" $RCLONE_FLAGS -v 2>&1 || echo "WARNING: legacy config restore failed with exit code $?"
     fi
-    # Legacy path: try to restore from old clawbot path if new path is empty
     if [ ! -f "$CONFIG_FILE" ]; then
         rclone copy "r2:${R2_BUCKET}/clawbot/" "$CONFIG_DIR/" $RCLONE_FLAGS -v 2>&1 || echo "WARNING: legacy config restore failed with exit code $?"
     fi
@@ -86,31 +84,27 @@ if [ ! -f "$CONFIG_FILE" ]; then
             --cloudflare-ai-gateway-gateway-id $CF_AI_GATEWAY_GATEWAY_ID \
             --cloudflare-ai-gateway-api-key $CLOUDFLARE_AI_GATEWAY_API_KEY"
     elif [ -n "$ANTHROPIC_API_KEY" ]; then
-        AUTH_ARGS="--auth-choice apiKey --anthropic-api-key $ANTHROPIC_API_KEY"
+        AUTH_ARGS="--auth-choice anthropic-api-key --anthropic-api-key $ANTHROPIC_API_KEY"
     elif [ -n "$OPENAI_API_KEY" ]; then
         AUTH_ARGS="--auth-choice openai-api-key --openai-api-key $OPENAI_API_KEY"
     fi
     echo "Running openclaw onboard..."
-    openclaw onboard --non-interactive --accept-risk \
+    timeout 120 openclaw onboard --non-interactive --accept-risk \
         --mode local \
         $AUTH_ARGS \
         --gateway-port 18789 \
         --gateway-bind lan \
         --skip-channels \
         --skip-skills \
-        --skip-health
+        --skip-health || echo "WARNING: onboard failed, continuing to gateway start"
     echo "Onboard step done"
 else
     echo "Using existing config"
 fi
 
 # ============================================================
-# PATCH CONFIG (channels, gateway token, trusted proxies, etc)
-# openclaw onboard handles provider/model config, but we need to patch in:
-# - Channel config (Telegram, Discord, Slack)
-# - Gateway token auth
-# - Trusted proxies for sandbox networking
-# - Base URL override for legacy AI Gateway path
+# PATCH CONFIG
+# ============================================================
 node -e "
 const fs = require('fs');
 const configPath = '/root/.openclaw/openclaw.json';
@@ -127,7 +121,6 @@ config.gateway.port = 18789;
 config.gateway.mode = 'local';
 config.gateway.trustedProxies = ['10.1.0.0'];
 
-// Gateway configuration
 if (process.env.OPENCLAW_GATEWAY_TOKEN) {
     config.gateway.auth = config.gateway.auth || {};
     config.gateway.auth.token = process.env.OPENCLAW_GATEWAY_TOKEN;
@@ -138,62 +131,20 @@ if (process.env.OPENCLAW_DEV_MODE === 'true') {
     config.gateway.controlUi.allowInsecureAuth = true;
 }
 
-// Legacy AI Gateway base URL override:
-// ANTHROPIC_BASE_URL is picked up natively by the Anthropic SDK,
-// so we don't need to patch the provider config. Writing a provider
-// entry without a models array breaks OpenClaw's config validation.
-
-// AI Gateway model override (CF_AI_GATEWAY_MODEL=provider/model-id)
-if (process.env.CF_AI_GATEWAY_MODEL) {
-    const raw = process.env.CF_AI_GATEWAY_MODEL;
-    const slashIdx = raw.indexOf('/');
-    const gwProvider = raw.substring(0, slashIdx);
-    const modelId = raw.substring(slashIdx + 1);
-    const accountId = process.env.CF_AI_GATEWAY_ACCOUNT_ID || process.env.CF_ACCOUNT_ID;
-    const gatewayId = process.env.CF_AI_GATEWAY_GATEWAY_ID;
-    const apiKey = process.env.CF_AI_GATEWAY_API_KEY || process.env.CLOUDFLARE_AI_GATEWAY_API_KEY;
-    let baseUrl = '';
-    if (accountId && gatewayId) {
-        baseUrl = 'https://gateway.ai.cloudflare.com/v1/' + accountId + '/' + gatewayId + '/' + gwProvider;
-        if (gwProvider === 'workers-ai') baseUrl += '/v1';
-    }
-    const providerName = gwProvider === 'workers-ai' ? 'workers-ai' : gwProvider;
-    if (baseUrl && apiKey) {
-        config.providers = config.providers || {};
-        config.providers[providerName] = {
-            apiKey: apiKey,
-            baseUrl: baseUrl,
-            models: [{ id: modelId }],
-        };
-        config.defaultModel = providerName + '/' + modelId;
-        console.log('AI Gateway model override: provider=' + providerName + ' model=' + modelId + ' via ' + baseUrl);
-    } else {
-        console.warn('CF_AI_GATEWAY_MODEL set but missing required config (account ID, gateway ID, or API key)');
-    }
-}
-
-// Telegram configuration
 if (process.env.TELEGRAM_BOT_TOKEN) {
-    const dmPolicy = process.env.TELEGRAM_DM_POLICY || 'pairing';
+    const dmPolicy = process.env.TELEGRAM_DM_POLICY || 'open';
     config.channels.telegram = {
         botToken: process.env.TELEGRAM_BOT_TOKEN,
         enabled: true,
         dmPolicy: dmPolicy,
+        allowFrom: ['*'],
     };
-    if (process.env.TELEGRAM_DM_ALLOW_FROM) {
-        config.channels.telegram.allowFrom = process.env.TELEGRAM_DM_ALLOW_FROM.split(',');
-    } else if (dmPolicy === 'open') {
-        config.channels.telegram.allowFrom = ['*'];
-    }
 }
 
-// Discord configuration
 if (process.env.DISCORD_BOT_TOKEN) {
     const dmPolicy = process.env.DISCORD_DM_POLICY || 'pairing';
     const dm = { policy: dmPolicy };
-    if (dmPolicy === 'open') {
-        dm.allowFrom = ['*'];
-    }
+    if (dmPolicy === 'open') dm.allowFrom = ['*'];
     config.channels.discord = {
         token: process.env.DISCORD_BOT_TOKEN,
         enabled: true,
@@ -201,7 +152,6 @@ if (process.env.DISCORD_BOT_TOKEN) {
     };
 }
 
-// Slack configuration
 if (process.env.SLACK_BOT_TOKEN && process.env.SLACK_APP_TOKEN) {
     config.channels.slack = {
         botToken: process.env.SLACK_BOT_TOKEN,
@@ -223,10 +173,8 @@ if $r2_configured; then
         MARKER=/tmp/.last-sync-marker
         LOGFILE=/tmp/r2-sync.log
         touch "$MARKER"
-
         while true; do
             sleep 30
-
             CHANGED=/tmp/.changed-files
             {
                 find "$CONFIG_DIR" -newer "$MARKER" -type f -printf '%P\n' 2>/dev/null
@@ -235,9 +183,7 @@ if $r2_configured; then
                     -not -path '*/.git/*' \
                     -type f -printf '%P\n' 2>/dev/null
             } > "$CHANGED"
-
             COUNT=$(wc -l < "$CHANGED" 2>/dev/null || echo 0)
-
             if [ "$COUNT" -gt 0 ]; then
                 echo "[sync] Uploading changes ($COUNT files) at $(date)" >> "$LOGFILE"
                 rclone sync "$CONFIG_DIR/" "r2:${R2_BUCKET}/openclaw/" \
