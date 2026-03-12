@@ -7,9 +7,8 @@
 # 4. Starts a background sync loop (rclone, watches for file changes)
 # 5. Starts the gateway
 
-# NOT using set -e: onboard failures must not prevent gateway from starting
+set -e
 
-# Always kill any existing openclaw gateway process so we start fresh with the current token.
 if pgrep -f "openclaw gateway" > /dev/null 2>&1; then
     echo "Killing existing OpenClaw gateway process before restart..."
     pkill -TERM -f "openclaw gateway" 2>/dev/null || true
@@ -28,18 +27,14 @@ echo "Config directory: $CONFIG_DIR"
 mkdir -p "$CONFIG_DIR"
 
 # ============================================================
-# RCLONE SETUP
+# RCLONE SETUP - configure rclone for R2 access
 # ============================================================
-
-r2_configured() {
-    [ -n "$R2_ACCESS_KEY_ID" ] && [ -n "$R2_SECRET_ACCESS_KEY" ] && [ -n "$CF_ACCOUNT_ID" ]
-}
-
-R2_BUCKET="${R2_BUCKET_NAME:-moltbot-data}"
-
-setup_rclone() {
-    mkdir -p "$(dirname "$RCLONE_CONF")"
-    cat > "$RCLONE_CONF" << EOF
+r2_configured=false
+if [ -n "$R2_ACCESS_KEY_ID" ] && [ -n "$R2_SECRET_ACCESS_KEY" ] && [ -n "$CF_ACCOUNT_ID" ]; then
+    R2_BUCKET="${R2_BUCKET_NAME:-moltbot-data}"
+    setup_rclone() {
+        mkdir -p "$(dirname "$RCLONE_CONF")"
+        cat > "$RCLONE_CONF" <<EOF
 [r2]
 type = s3
 provider = Cloudflare
@@ -47,54 +42,36 @@ access_key_id = $R2_ACCESS_KEY_ID
 secret_access_key = $R2_SECRET_ACCESS_KEY
 endpoint = https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com
 acl = private
-no_check_bucket = true
 EOF
-    touch /tmp/.rclone-configured
-    echo "Rclone configured for bucket: $R2_BUCKET"
-}
-
-RCLONE_FLAGS="--transfers=16 --fast-list --s3-no-check-bucket"
-
-# ============================================================
-# RESTORE FROM R2
-# ============================================================
-
-if r2_configured; then
+    }
     setup_rclone
-
-    echo "Checking R2 for existing backup..."
-    if rclone ls "r2:${R2_BUCKET}/openclaw/openclaw.json" $RCLONE_FLAGS 2>/dev/null | grep -q openclaw.json; then
-        echo "Restoring config from R2..."
-        rclone copy "r2:${R2_BUCKET}/openclaw/" "$CONFIG_DIR/" $RCLONE_FLAGS -v 2>&1 || echo "WARNING: config restore failed with exit code $?"
-        echo "Config restored"
-    elif rclone ls "r2:${R2_BUCKET}/clawdbot/clawdbot.json" $RCLONE_FLAGS 2>/dev/null | grep -q clawdbot.json; then
-        echo "Restoring from legacy R2 backup..."
-        rclone copy "r2:${R2_BUCKET}/clawdbot/" "$CONFIG_DIR/" $RCLONE_FLAGS -v 2>&1 || echo "WARNING: legacy config restore failed with exit code $?"
-        if [ -f "$CONFIG_DIR/clawdbot.json" ] && [ ! -f "$CONFIG_FILE" ]; then
-            mv "$CONFIG_DIR/clawdbot.json" "$CONFIG_FILE"
-        fi
-        echo "Legacy config restored and migrated"
-    else
-        echo "No backup found in R2, starting fresh"
-    fi
-
-    REMOTE_WS_COUNT=$(rclone ls "r2:${R2_BUCKET}/workspace/" $RCLONE_FLAGS 2>/dev/null | wc -l )
-    if [ "$REMOTE_WS_COUNT" -gt 0 ]; then
-        echo "Restoring workspace from R2 ($REMOTE_WS_COUNT files)..."
-        mkdir -p "$WORKSPACE_DIR"
-        rclone copy "r2:${R2_BUCKET}/workspace/" "$WORKSPACE_DIR/" $RCLONE_FLAGS -v 2>&1 || echo "WARNING: workspace restore failed with exit code $?"
-        echo "Workspace restored"
-    fi
-
-    REMOTE_SK_COUNT=$(rclone ls "r2:${R2_BUCKET}/skills/" $RCLONE_FLAGS 2>/dev/null | wc -l)
-    if [ "$REMOTE_SK_COUNT" -gt 0 ]; then
-        echo "Restoring skills from R2 ($REMOTE_SK_COUNT files)..."
-        mkdir -p "$SKILLS_DIR"
-        rclone copy "r2:${R2_BUCKET}/skills/" "$SKILLS_DIR/" $RCLONE_FLAGS -v 2>&1 || echo "WARNING: skills restore failed with exit code $?"
-        echo "Skills restored"
-    fi
+    RCLONE_FLAGS="--s3-no-check-bucket --s3-force-path-style"
+    r2_configured=true
+    echo "R2 storage configured for bucket: $R2_BUCKET"
 else
-    echo "R2 not configured, starting fresh"
+    echo "R2 storage not configured (skipping persistence)"
+fi
+
+# ============================================================
+# RESTORE FROM R2 (if configured)
+# ============================================================
+if $r2_configured; then
+    echo "Restoring config from R2..."
+    rclone copy "r2:${R2_BUCKET}/openclaw/" "$CONFIG_DIR/" $RCLONE_FLAGS -v 2>&1 || echo "WARNING: config restore failed with exit code $?"
+    # Legacy path: try to restore from old clawdot path if new path is empty
+    if [ ! -f "$CONFIG_FILE" ]; then
+        rclone copy "r2:${R2_BUCKET}/clawdot/" "$CONFIG_DIR/" $RCLONE_FLAGS -v 2>&1 || echo "WARNING: legacy config restore failed with exit code $?"
+    fi
+    # Legacy path: try to restore from old clawbot path if new path is empty
+    if [ ! -f "$CONFIG_FILE" ]; then
+        rclone copy "r2:${R2_BUCKET}/clawbot/" "$CONFIG_DIR/" $RCLONE_FLAGS -v 2>&1 || echo "WARNING: legacy config restore failed with exit code $?"
+    fi
+    echo "Restoring Workspace from R2..."
+    mkdir -p "$WORKSPACE_DIR"
+    rclone copy "r2:${R2_BUCKET}/workspace/" "$WORKSPACE_DIR/" $RCLONE_FLAGS -v 2>&1 || echo "WARNING: workspace restore failed with exit code $?"
+    echo "Restoring Skills from R2..."
+    mkdir -p "$SKILLS_DIR"
+    rclone copy "r2:${R2_BUCKET}/skills/" "$SKILLS_DIR/" $RCLONE_FLAGS -v 2>&1 || echo "WARNING: skills restore failed with exit code $?"
 fi
 
 # ============================================================
@@ -102,7 +79,6 @@ fi
 # ============================================================
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "No existing config found, running openclaw onboard..."
-
     AUTH_ARGS=""
     if [ -n "$CLOUDFLARE_AI_GATEWAY_API_KEY" ] && [ -n "$CF_AI_GATEWAY_ACCOUNT_ID" ] && [ -n "$CF_AI_GATEWAY_GATEWAY_ID" ]; then
         AUTH_ARGS="--auth-choice cloudflare-ai-gateway-api-key \
@@ -114,53 +90,47 @@ if [ ! -f "$CONFIG_FILE" ]; then
     elif [ -n "$OPENAI_API_KEY" ]; then
         AUTH_ARGS="--auth-choice openai-api-key --openai-api-key $OPENAI_API_KEY"
     fi
-
-    echo "Running openclaw onboard (timeout 90s)..."
-    timeout 90 openclaw onboard --non-interactive --accept-risk \
+    echo "Running openclaw onboard..."
+    openclaw onboard --non-interactive --accept-risk \
         --mode local \
         $AUTH_ARGS \
         --gateway-port 18789 \
         --gateway-bind lan \
         --skip-channels \
         --skip-skills \
-        --skip-health || echo "WARNING: onboard exited with code $? â continuing to gateway start"
-
+        --skip-health
     echo "Onboard step done"
 else
     echo "Using existing config"
 fi
 
 # ============================================================
-# PATCH CONFIG
-# ============================================================
-node << 'EOFPATCH'
+# PATCH CONFIG (channels, gateway token, trusted proxies, etc)
+# openclaw onboard handles provider/model config, but we need to patch in:
+# - Channel config (Telegram, Discord, Slack)
+# - Gateway token auth
+# - Trusted proxies for sandbox networking
+# - Base URL override for legacy AI Gateway path
+node -e "
 const fs = require('fs');
-const path = require('path');
-
 const configPath = '/root/.openclaw/openclaw.json';
-console.log('Patching config at:', configPath);
 let config = {};
-
 try {
     config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 } catch (e) {
-    console.log('Starting with empty config');
+    console.log('No existing config, starting fresh');
 }
 
 config.gateway = config.gateway || {};
 config.channels = config.channels || {};
-
 config.gateway.port = 18789;
 config.gateway.mode = 'local';
 config.gateway.trustedProxies = ['10.1.0.0'];
 
-const gatewayToken = process.env.MOLTB9?_GATEWAY_TOKEN || process.env.OPENCLAW_GATEWAY_TOKEN;
-if (gatewayToken) {
+// Gateway configuration
+if (process.env.OPENCLAW_GATEWAY_TOKEN) {
     config.gateway.auth = config.gateway.auth || {};
-    config.gateway.auth.token = gatewayToken;
-    console.log('Gateway token configured');
-} else {
-    console.log('WARNING: No gateway token found');
+    config.gateway.auth.token = process.env.OPENCLAW_GATEWAY_TOKEN;
 }
 
 if (process.env.OPENCLAW_DEV_MODE === 'true') {
@@ -168,56 +138,62 @@ if (process.env.OPENCLAW_DEV_MODE === 'true') {
     config.gateway.controlUi.allowInsecureAuth = true;
 }
 
+// Legacy AI Gateway base URL override:
+// ANTHROPIC_BASE_URL is picked up natively by the Anthropic SDK,
+// so we don't need to patch the provider config. Writing a provider
+// entry without a models array breaks OpenClaw's config validation.
+
+// AI Gateway model override (CF_AI_GATEWAY_MODEL=provider/model-id)
 if (process.env.CF_AI_GATEWAY_MODEL) {
     const raw = process.env.CF_AI_GATEWAY_MODEL;
     const slashIdx = raw.indexOf('/');
     const gwProvider = raw.substring(0, slashIdx);
     const modelId = raw.substring(slashIdx + 1);
-    const accountId = process.env.CF_AI_GATEWAY_ACCOUNT_ID;
+    const accountId = process.env.CF_AI_GATEWAY_ACCOUNT_ID || process.env.CF_ACCOUNT_ID;
     const gatewayId = process.env.CF_AI_GATEWAY_GATEWAY_ID;
-    const apiKey = process.env.CLOUDFLARE_AI_GATEWAY_API_KEY;
-    let baseUrl;
+    const apiKey = process.env.CF_AI_GATEWAY_API_KEY || process.env.CLOUDFLARE_AI_GATEWAY_API_KEY;
+    let baseUrl = '';
     if (accountId && gatewayId) {
         baseUrl = 'https://gateway.ai.cloudflare.com/v1/' + accountId + '/' + gatewayId + '/' + gwProvider;
-        if (gwProvider === 'workers-ai' ) baseUrl += '/v1';
-    } else if (gwProvider === 'workers-ai' && process.env.CF_ACCOUNT_ID) {
-        baseUrl = 'https://api.cloudflare.com/client/v4/accounts/' + process.env.CF_ACCOUNT_ID + '/ai/v1';
+        if (gwProvider === 'workers-ai') baseUrl += '/v1';
     }
-    if (baseUrl && apiKey ) {
-        const api = gwProvider === 'anthropic' ? 'anthropic-messages' : 'openai-completions';
-        const providerName = 'cf-ai-gw-' + gwProvider;
-        config.models = config.models || {};
-        config.models.providers = config.models.providers || {};
-        config.models.providers[providerName] = {
-            baseUrl: baseUrl,
+    const providerName = gwProvider === 'workers-ai' ? 'workers-ai' : gwProvider;
+    if (baseUrl && apiKey) {
+        config.providers = config.providers || {};
+        config.providers[providerName] = {
             apiKey: apiKey,
-            api: api,
-            models: [{ id: modelId, name: modelId, contextWindow: 131072, maxTokens: 8192 }],
+            baseUrl: baseUrl,
+            models: [{ id: modelId }],
         };
-        config.agents = config.agents || {};
-        config.agents.defaults = config.agents.defaults || {};
-        config.agents.defaults.model = { primary: providerName + '/' + modelId };
-        console.log('AI Gateway model override configured');
+        config.defaultModel = providerName + '/' + modelId;
+        console.log('AI Gateway model override: provider=' + providerName + ' model=' + modelId + ' via ' + baseUrl);
+    } else {
+        console.warn('CF_AI_GATEWAY_MODEL set but missing required config (account ID, gateway ID, or API key)');
     }
 }
 
+// Telegram configuration
 if (process.env.TELEGRAM_BOT_TOKEN) {
-    const dmPolicy = process.env.TELEGRAM_DM_POLICY || 'open';
+    const dmPolicy = process.env.TELEGRAM_DM_POLICY || 'pairing';
     config.channels.telegram = {
         botToken: process.env.TELEGRAM_BOT_TOKEN,
         enabled: true,
         dmPolicy: dmPolicy,
-        allowFrom: ['*'],
-        groupPolicy: 'allowlist',
-        streamMode: 'partial',
     };
-    console.log('Telegram channel configured with dmPolicy:', dmPolicy);
+    if (process.env.TELEGRAM_DM_ALLOW_FROM) {
+        config.channels.telegram.allowFrom = process.env.TELEGRAM_DM_ALLOW_FROM.split(',');
+    } else if (dmPolicy === 'open') {
+        config.channels.telegram.allowFrom = ['*'];
+    }
 }
 
+// Discord configuration
 if (process.env.DISCORD_BOT_TOKEN) {
     const dmPolicy = process.env.DISCORD_DM_POLICY || 'pairing';
     const dm = { policy: dmPolicy };
-    if (dmPolicy === 'open') dm.allowFrom = ['*'];
+    if (dmPolicy === 'open') {
+        dm.allowFrom = ['*'];
+    }
     config.channels.discord = {
         token: process.env.DISCORD_BOT_TOKEN,
         enabled: true,
@@ -225,6 +201,7 @@ if (process.env.DISCORD_BOT_TOKEN) {
     };
 }
 
+// Slack configuration
 if (process.env.SLACK_BOT_TOKEN && process.env.SLACK_APP_TOKEN) {
     config.channels.slack = {
         botToken: process.env.SLACK_BOT_TOKEN,
@@ -233,42 +210,14 @@ if (process.env.SLACK_BOT_TOKEN && process.env.SLACK_APP_TOKEN) {
     };
 }
 
-// Patch Anthropic API key directly into openclaw.json auth profile
-// This ensures the key is always available regardless of how onboard ran
-if (process.env.ANTHROPIC_API_KEY) {
-    config.auth = config.auth || {};
-    config.auth.profiles = config.auth.profiles || {};
-    config.auth.profiles['anthropic:default'] = config.auth.profiles['anthropic:default'] || {};
-    config.auth.profiles['anthropic:default'].provider = 'anthropic';
-    config.auth.profiles['anthropic:default'].mode = 'api_key';
-    config.auth.profiles['anthropic:default'].key = process.env.ANTHROPIC_API_KEY;
-    console.log('Anthropic API key patched into openclaw.json auth profile');
-}
-
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 console.log('Configuration patched successfully');
-
-// Also patch auth-profiles.json if it exists
-const anthropicKey = process.env.ANTHROPIC_API_KEY;
-if (anthropicKey) {
-    const agentAuthPath = '/root/.openclaw/agents/main/agent/auth-profiles.json';
-    try {
-        const ap = JSON.parse(fs.readFileSync(agentAuthPath, 'utf8'));
-        if (ap.profiles && ap.profiles['anthropic:default']) {
-            ap.profiles['anthropic:default'].key = anthropicKey;
-            fs.writeFileSync(agentAuthPath, JSON.stringify(ap, null, 2));
-            console.log('auth-profiles.json patched with Anthropic API key');
-        }
-    } catch (e) {
-        console.log('auth-profiles.json not found or not patchable:', e.message);
-    }
-}
-EOFPATCH
+"
 
 # ============================================================
 # BACKGROUND SYNC LOOP
 # ============================================================
-if r2_configured; then
+if $r2_configured; then
     echo "Starting background R2 sync loop..."
     (
         MARKER=/tmp/.last-sync-marker
@@ -321,12 +270,10 @@ rm -f "$CONFIG_DIR/gateway.lock" 2>/dev/null || true
 
 echo "Dev mode: ${OPENCLAW_DEV_MODE:-false}"
 
-GATEWAY_TOKEN="${MOLTBOT_GATEWAY_TOKEN:-$OPENCLAW_GATEWAY_TOKEN}"
-
-if [ -n "$GATEWAY_TOKEN" ]; then
-    echo "Starting gateway with token auth (token length: ${#GATEWAY_TOKEN})..."
-    exec openclaw gateway --port 18789 --verbose --allow-unconfigured --bind lan --token "$GATEWAY_TOKEN"
+if [ -n "$OPENCLAW_GATEWAY_TOKEN" ]; then
+    echo "Starting gateway with token auth..."
+    exec openclaw gateway --port 18789 --verbose --allow-unconfigured --bind lan --token "$OPENCLAW_GATEWAY_TOKEN"
 else
-    echo "WARNING: No MOLTBOT_GATEWAY_TOKEN or OPENCLAW_GATEWAY_TOKEN set â starting without token"
+    echo "Starting gateway with device pairing (no token)..."
     exec openclaw gateway --port 18789 --verbose --allow-unconfigured --bind lan
 fi
