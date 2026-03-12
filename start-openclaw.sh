@@ -30,8 +30,8 @@ mkdir -p "$CONFIG_DIR"
 # RCLONE SETUP - configure rclone for R2 access
 # ============================================================
 r2_configured=false
-if [ -n "$R2_ACCESS_KEY_ID" ] && [ -n "$R2_SECRET_ACCESS_KEY" ] && [ -n "$CF_ACCOUNT_ID" ]; then
-    R2_BUCKET="${R2_BUCKET_NAME:-moltbot-data}"
+if [ -n "$R2_ACCESS_KEY_ID" ] && [ -n "$R2_SECRET_ACCESS_KEY" ] && [ -n "$CF_ACCOUNT_ID" ] && [ -n "$R2_BUCKET_NAME" ]; then
+    R2_BUCKET="$R2_BUCKET_NAME"
     setup_rclone() {
         mkdir -p "$(dirname "$RCLONE_CONF")"
         cat > "$RCLONE_CONF" <<EOF
@@ -57,19 +57,13 @@ fi
 # ============================================================
 if $r2_configured; then
     echo "Restoring config from R2..."
-    rclone copy "r2:${R2_BUCKET}/openclaw/" "$CONFIG_DIR/" $RCLONE_FLAGS -v 2>&1 || echo "WARNING: config restore failed with exit code $?"
-    if [ ! -f "$CONFIG_FILE" ]; then
-        rclone copy "r2:${R2_BUCKET}/clawdot/" "$CONFIG_DIR/" $RCLONE_FLAGS -v 2>&1 || echo "WARNING: legacy config restore failed with exit code $?"
-    fi
-    if [ ! -f "$CONFIG_FILE" ]; then
-        rclone copy "r2:${R2_BUCKET}/clawbot/" "$CONFIG_DIR/" $RCLONE_FLAGS -v 2>&1 || echo "WARNING: legacy config restore failed with exit code $?"
-    fi
+    rclone copy "r2:${R2_BUCKET}/openclaw/" "$CONFIG_DIR/" $RCLONE_FLAGS -v 2>&1 || echo "WARNING: config restore failed"
     echo "Restoring Workspace from R2..."
     mkdir -p "$WORKSPACE_DIR"
-    rclone copy "r2:${R2_BUCKET}/workspace/" "$WORKSPACE_DIR/" $RCLONE_FLAGS -v 2>&1 || echo "WARNING: workspace restore failed with exit code $?"
+    rclone copy "r2:${R2_BUCKET}/workspace/" "$WORKSPACE_DIR/" $RCLONE_FLAGS -v 2>&1 || echo "WARNING: workspace restore failed"
     echo "Restoring Skills from R2..."
     mkdir -p "$SKILLS_DIR"
-    rclone copy "r2:${R2_BUCKET}/skills/" "$SKILLS_DIR/" $RCLONE_FLAGS -v 2>&1 || echo "WARNING: skills restore failed with exit code $?"
+    rclone copy "r2:${R2_BUCKET}/skills/" "$SKILLS_DIR/" $RCLONE_FLAGS -v 2>&1 || echo "WARNING: skills restore failed"
 fi
 
 # ============================================================
@@ -84,7 +78,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
             --cloudflare-ai-gateway-gateway-id $CF_AI_GATEWAY_GATEWAY_ID \
             --cloudflare-ai-gateway-api-key $CLOUDFLARE_AI_GATEWAY_API_KEY"
     elif [ -n "$ANTHROPIC_API_KEY" ]; then
-        AUTH_ARGS="--auth-choice apiKey --token $ANTHROPIC_API_KEY"
+        AUTH_ARGS="--auth-choice apiKey --anthropic-api-key $ANTHROPIC_API_KEY"
     elif [ -n "$OPENAI_API_KEY" ]; then
         AUTH_ARGS="--auth-choice openai-api-key --openai-api-key $OPENAI_API_KEY"
     fi
