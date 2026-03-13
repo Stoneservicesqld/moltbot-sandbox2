@@ -120,6 +120,15 @@ if (process.env.OPENCLAW_GATEWAY_TOKEN) {
     config.gateway.auth.token = process.env.OPENCLAW_GATEWAY_TOKEN;
 }
 
+if (process.env.ANTHROPIC_API_KEY) {
+    config.auth = config.auth || {};
+    config.auth.profiles = config.auth.profiles || {};
+    config.auth.profiles['anthropic:default'] = config.auth.profiles['anthropic:default'] || {};
+    config.auth.profiles['anthropic:default'].provider = 'anthropic';
+    config.auth.profiles['anthropic:default'].mode = 'api_key';
+    config.auth.profiles['anthropic:default'].key = process.env.ANTHROPIC_API_KEY;
+}
+
 if (process.env.OPENCLAW_DEV_MODE === 'true') {
     config.gateway.controlUi = config.gateway.controlUi || {};
     config.gateway.controlUi.allowInsecureAuth = true;
