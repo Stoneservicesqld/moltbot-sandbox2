@@ -27,6 +27,13 @@ echo "Config directory: $CONFIG_DIR"
 mkdir -p "$CONFIG_DIR"
 
 # ============================================================
+# INSTALL SYSTEM DEPENDENCIES
+# ============================================================
+echo "Installing system dependencies (poppler-utils for PDF support)..."
+apt-get install -y poppler-utils 2>&1 | tail -3 || echo "WARNING: apt-get install failed"
+echo "System dependencies installed"
+
+# ============================================================
 # RCLONE SETUP - configure rclone for R2 access
 # ============================================================
 r2_configured=false
@@ -127,6 +134,25 @@ if (process.env.ANTHROPIC_API_KEY) {
     config.auth.profiles['anthropic:default'].provider = 'anthropic';
     config.auth.profiles['anthropic:default'].mode = 'api_key';
     config.auth.profiles['anthropic:default'].key = process.env.ANTHROPIC_API_KEY;
+}
+
+if (process.env.OPENAI_API_KEY) {
+    config.auth = config.auth || {};
+    config.auth.profiles = config.auth.profiles || {};
+    config.auth.profiles['openai:default'] = config.auth.profiles['openai:default'] || {};
+    config.auth.profiles['openai:default'].provider = 'openai';
+    config.auth.profiles['openai:default'].mode = 'api_key';
+    config.auth.profiles['openai:default'].key = process.env.OPENAI_API_KEY;
+}
+
+if (process.env.BRAVE_API_KEY) {
+    config.tools = config.tools || {};
+    config.tools.web = config.tools.web || {};
+    config.tools.web.search = config.tools.web.search || {};
+    config.tools.web.search.provider = 'brave';
+    config.tools.web.search.apiKey = process.env.BRAVE_API_KEY;
+    config.tools.web.search.maxResults = config.tools.web.search.maxResults || 5;
+    config.tools.web.search.timeoutSeconds = config.tools.web.search.timeoutSeconds || 30;
 }
 
 if (process.env.OPENCLAW_DEV_MODE === 'true') {
