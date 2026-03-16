@@ -133,7 +133,6 @@ if (process.env.ANTHROPIC_API_KEY) {
     config.auth.profiles['anthropic:default'] = config.auth.profiles['anthropic:default'] || {};
     config.auth.profiles['anthropic:default'].provider = 'anthropic';
     config.auth.profiles['anthropic:default'].mode = 'api_key';
-    config.auth.profiles['anthropic:default'].key = process.env.ANTHROPIC_API_KEY;
 }
 
 if (process.env.OPENAI_API_KEY) {
@@ -142,7 +141,6 @@ if (process.env.OPENAI_API_KEY) {
     config.auth.profiles['openai:default'] = config.auth.profiles['openai:default'] || {};
     config.auth.profiles['openai:default'].provider = 'openai';
     config.auth.profiles['openai:default'].mode = 'api_key';
-    config.auth.profiles['openai:default'].key = process.env.OPENAI_API_KEY;
 }
 
 if (process.env.BRAVE_API_KEY) {
