@@ -34,13 +34,6 @@ echo "========================"
 mkdir -p "$CONFIG_DIR"
 
 # ============================================================
-# INSTALL SYSTEM DEPENDENCIES
-# ============================================================
-echo "Installing system dependencies (poppler-utils for PDF support)..."
-apt-get install -y poppler-utils 2>&1 | tail -3 || echo "WARNING: apt-get install failed"
-echo "System dependencies installed"
-
-# ============================================================
 # RCLONE SETUP - configure rclone for R2 access
 # ============================================================
 r2_configured=false
