@@ -25,6 +25,12 @@ RCLONE_CONF="/root/.config/rclone/rclone.conf"
 LAST_SYNC_FILE="/tmp/.last-sync"
 
 echo "Config directory: $CONFIG_DIR"
+echo "=== KEY PRESENCE CHECK ==="
+echo "ANTHROPIC_API_KEY: $([ -n "$ANTHROPIC_API_KEY" ] && echo SET || echo MISSING)"
+echo "OPENAI_API_KEY: $([ -n "$OPENAI_API_KEY" ] && echo SET || echo MISSING)"
+echo "TELEGRAM_BOT_TOKEN: $([ -n "$TELEGRAM_BOT_TOKEN" ] && echo SET || echo MISSING)"
+echo "OPENCLAW_GATEWAY_TOKEN: $([ -n "$OPENCLAW_GATEWAY_TOKEN" ] && echo SET || echo MISSING)"
+echo "========================"
 mkdir -p "$CONFIG_DIR"
 
 # ============================================================
