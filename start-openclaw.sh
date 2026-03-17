@@ -187,6 +187,14 @@ if (process.env.SLACK_BOT_TOKEN && process.env.SLACK_APP_TOKEN) {
     };
 }
 
+if (process.env.OPENCLAW_MODEL) {
+    config.agents = config.agents || {};
+    config.agents.defaults = config.agents.defaults || {};
+    config.agents.defaults.model = config.agents.defaults.model || {};
+    config.agents.defaults.model.primary = process.env.OPENCLAW_MODEL;
+    console.log('Model overridden to:', process.env.OPENCLAW_MODEL);
+}
+
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 console.log('Configuration patched successfully');
 "
