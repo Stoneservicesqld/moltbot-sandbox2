@@ -8,6 +8,7 @@
 # 5. Starts the gateway
 
 # set -e removed: onboard failures must not prevent gateway from starting
+# Last forced restart: 2026-03-17T03:47:59Z
 
 if pgrep -f "openclaw gateway" > /dev/null 2>&1; then
     echo "Killing existing OpenClaw gateway process before restart..."
