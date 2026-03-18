@@ -72,7 +72,7 @@ if $r2_configured; then
     echo "Restoring Skills from R2 (blocking)..."
     mkdir -p "$SKILLS_DIR"
     rclone copy "r2:${R2_BUCKET}/skills/" "$SKILLS_DIR/" $RCLONE_FLAGS -v 2>&1 || echo "WARNING: skills restore failed"
-    echo "Workspace restore deferred to background (runs after gateway starts)"
+    echo "Workspace restore DISABLED (prevents disk-fill crash on cold start)"
     mkdir -p "$WORKSPACE_DIR"
 fi
 
@@ -206,15 +206,12 @@ console.log('Configuration patched successfully');
 # BACKGROUND SYNC LOOP
 # ============================================================
 if $r2_configured; then
-    echo "Starting background R2 sync loop (includes deferred workspace restore)..."
+    echo "Starting background R2 sync loop (save-only, no workspace restore)..."
     (
         MARKER=/tmp/.last-sync-marker
         LOGFILE=/tmp/r2-sync.log
-        # Restore workspace in background after gateway has started
-        echo "[sync] Starting deferred workspace restore from R2..." >> "$LOGFILE"
-        rclone copy "r2:${R2_BUCKET}/workspace/" "$WORKSPACE_DIR/" $RCLONE_FLAGS 2>> "$LOGFILE" && \
-            echo "[sync] Workspace restore complete at $(date)" >> "$LOGFILE" || \
-            echo "[sync] WARNING: workspace restore failed" >> "$LOGFILE"
+        # Workspace restore DISABLED - 8000 files fills container disk and crashes startup
+        echo "[sync] Workspace restore skipped (disk space protection)" >> "$LOGFILE"
         touch "$MARKER"
         while true; do
             sleep 30
