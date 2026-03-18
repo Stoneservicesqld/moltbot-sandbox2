@@ -64,8 +64,12 @@ fi
 # RESTORE FROM R2 (if configured)
 # ============================================================
 if $r2_configured; then
-    echo "Restoring config from R2 (blocking)..."
-    rclone copy "r2:${R2_BUCKET}/openclaw/" "$CONFIG_DIR/" $RCLONE_FLAGS -v 2>&1 || echo "WARNING: config restore failed"
+    echo "Restoring config from R2 (blocking, excluding workspace/media/agents subdirs)..."
+    rclone copy "r2:${R2_BUCKET}/openclaw/" "$CONFIG_DIR/" $RCLONE_FLAGS \
+        --exclude='workspace/**' \
+        --exclude='media/**' \
+        --exclude='agents/**' \
+        -v 2>&1 || echo "WARNING: config restore failed"
     echo "Restoring auth profiles and sessions from R2 (blocking)..."
     mkdir -p "$AGENTS_DIR"
     rclone copy "r2:${R2_BUCKET}/openclaw-agents/" "$AGENTS_DIR/" $RCLONE_FLAGS -v 2>&1 || echo "WARNING: openclaw-agents restore failed"
