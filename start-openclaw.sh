@@ -19,6 +19,7 @@ fi
 
 CONFIG_DIR="/root/.openclaw"
 CONFIG_FILE="$CONFIG_DIR/openclaw.json"
+AGENTS_DIR="$CONFIG_DIR/agents"
 WORKSPACE_DIR="/root/clawd"
 SKILLS_DIR="/root/clawd/skills"
 RCLONE_CONF="/root/.config/rclone/rclone.conf"
@@ -65,6 +66,9 @@ fi
 if $r2_configured; then
     echo "Restoring config from R2 (blocking)..."
     rclone copy "r2:${R2_BUCKET}/openclaw/" "$CONFIG_DIR/" $RCLONE_FLAGS -v 2>&1 || echo "WARNING: config restore failed"
+    echo "Restoring auth profiles and sessions from R2 (blocking)..."
+    mkdir -p "$AGENTS_DIR"
+    rclone copy "r2:${R2_BUCKET}/openclaw-agents/" "$AGENTS_DIR/" $RCLONE_FLAGS -v 2>&1 || echo "WARNING: openclaw-agents restore failed"
     echo "Restoring Skills from R2 (blocking)..."
     mkdir -p "$SKILLS_DIR"
     rclone copy "r2:${R2_BUCKET}/skills/" "$SKILLS_DIR/" $RCLONE_FLAGS -v 2>&1 || echo "WARNING: skills restore failed"
@@ -217,6 +221,7 @@ if $r2_configured; then
             CHANGED=/tmp/.changed-files
             {
                 find "$CONFIG_DIR" -newer "$MARKER" -type f -printf '%P\n' 2>/dev/null
+                find "$AGENTS_DIR" -newer "$MARKER" -type f -printf '%P\n' 2>/dev/null
                 find "$WORKSPACE_DIR" -newer "$MARKER" \
                     -not -path '*/node_modules/*' \
                     -not -path '*/.git/*' \
@@ -227,6 +232,10 @@ if $r2_configured; then
                 echo "[sync] Uploading changes ($COUNT files) at $(date)" >> "$LOGFILE"
                 rclone sync "$CONFIG_DIR/" "r2:${R2_BUCKET}/openclaw/" \
                     $RCLONE_FLAGS --exclude='*.lock' --exclude='*.log' --exclude='*.tmp' --exclude='.git/**' --exclude='openclaw.json' 2>> "$LOGFILE"
+                if [ -d "$AGENTS_DIR" ]; then
+                    rclone sync "$AGENTS_DIR/" "r2:${R2_BUCKET}/openclaw-agents/" \
+                        $RCLONE_FLAGS --exclude='*.lock' --exclude='*.log' --exclude='*.tmp' 2>> "$LOGFILE"
+                fi
                 if [ -d "$WORKSPACE_DIR" ]; then
                     rclone sync "$WORKSPACE_DIR/" "r2:${R2_BUCKET}/workspace/" \
                         $RCLONE_FLAGS --exclude='skills/**' --exclude='.git/**' --exclude='node_modules/**' 2>> "$LOGFILE"
