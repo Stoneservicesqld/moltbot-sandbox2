@@ -210,12 +210,16 @@ console.log('Configuration patched successfully');
 # BACKGROUND SYNC LOOP
 # ============================================================
 if $r2_configured; then
-    echo "Starting background R2 sync loop (save-only, no workspace restore)..."
+    echo "Starting background R2 sync loop..."
     (
         MARKER=/tmp/.last-sync-marker
         LOGFILE=/tmp/r2-sync.log
-        # Workspace restore DISABLED - 8000 files fills container disk and crashes startup
-        echo "[sync] Workspace restore skipped (disk space protection)" >> "$LOGFILE"
+        # Restore workspace in background AFTER gateway has started (safe - gateway is already bound to port)
+        echo "[sync] Starting deferred workspace restore from R2..." >> "$LOGFILE"
+        rclone copy "r2:${R2_BUCKET}/workspace/" "$WORKSPACE_DIR/" \
+            $RCLONE_FLAGS --exclude='node_modules/**' --exclude='.git/**' 2>> "$LOGFILE" && \
+            echo "[sync] Workspace restore complete at $(date)" >> "$LOGFILE" || \
+            echo "[sync] WARNING: workspace restore failed" >> "$LOGFILE"
         touch "$MARKER"
         while true; do
             sleep 30
@@ -231,8 +235,12 @@ if $r2_configured; then
             COUNT=$(wc -l < "$CHANGED" 2>/dev/null || echo 0)
             if [ "$COUNT" -gt 0 ]; then
                 echo "[sync] Uploading changes ($COUNT files) at $(date)" >> "$LOGFILE"
+                # Sync config - explicitly exclude subdirs that belong in their own R2 prefixes
                 rclone sync "$CONFIG_DIR/" "r2:${R2_BUCKET}/openclaw/" \
-                    $RCLONE_FLAGS --exclude='*.lock' --exclude='*.log' --exclude='*.tmp' --exclude='.git/**' --exclude='openclaw.json' 2>> "$LOGFILE"
+                    $RCLONE_FLAGS \
+                    --exclude='workspace/**' --exclude='media/**' --exclude='agents/**' \
+                    --exclude='*.lock' --exclude='*.log' --exclude='*.tmp' \
+                    --exclude='.git/**' --exclude='openclaw.json' 2>> "$LOGFILE"
                 if [ -d "$AGENTS_DIR" ]; then
                     rclone sync "$AGENTS_DIR/" "r2:${R2_BUCKET}/openclaw-agents/" \
                         $RCLONE_FLAGS --exclude='*.lock' --exclude='*.log' --exclude='*.tmp' 2>> "$LOGFILE"
